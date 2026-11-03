@@ -1,14 +1,66 @@
-Bamboo (Vietnamese Input Method) engine support for Fcitx
+# Native Bamboo for Fcitx 5
 
-Based on https://github.com/BambooEngine/bamboo-core
+A Vietnamese input method addon with a native C++ engine. Building and running
+this version requires no Go compiler, cgo bridge, or Go runtime.
 
-Released under LGPLv2.1+
+See [INSTALL.md](INSTALL.md) for Ubuntu 26.04 dependencies, build, installation,
+desktop activation, troubleshooting, and removal instructions.
 
-Requires:
-Fcitx 5, go.
+The native port preserves Bamboo's built-in input methods, custom keymaps,
+spelling and dictionary checks, macros, restoration, tone options, and output
+charsets. Existing Fcitx Bamboo configuration files continue to work.
 
-Install:
-$ mkdir build && cd build
-$ cmake -DCMAKE_INSTALL_PREFIX=[prefix to fcitx5] ..
-$ make
-# make install
+## Architecture
+
+- `bamboo/native/`: independently buildable C++17 processing library and adapter;
+  ICU provides Unicode classification and simple case conversion.
+- `src/`: Fcitx addon using typed C++ objects and immutable dictionary/macro
+  snapshots. The Fcitx build uses the C++ standard required by its development
+  package (C++20 on Ubuntu 26.04).
+- `data/`, `po/`: dictionary, icon, and translations.
+- `tests/`: isolated Fcitx test-frontend integration test.
+- Legacy Go sources and the old core submodule are reference material only.
+  Neither submodule initialization nor a sibling core checkout is needed to build.
+
+## Tests
+
+Run `ctest --test-dir build-native --output-on-failure` after the full build.
+The checked-in fixtures replay the original Go core tests and deterministic
+corpora across every built-in input method. Additional fixtures compare adapter
+acceptance, preedit, commits, configuration options, custom rules, utilities,
+and every output charset. Tests also exercise independent contexts, reload
+ownership, dictionary reading, and malformed custom definitions.
+
+Core-only development needs CMake, a C++17 compiler, and ICU development headers:
+
+```sh
+cmake -S bamboo/native -B build-core -DCMAKE_BUILD_TYPE=Release
+cmake --build build-core
+ctest --test-dir build-core --output-on-failure
+```
+
+For sanitizer checks, add these flags when configuring a fresh build directory:
+
+```sh
+-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+-DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+```
+
+Go and Python are needed only to regenerate reference material. With the original
+`bamboo-core` checkout available, run:
+
+```sh
+python3 tools/import-go-tables.py ../bamboo-core
+python3 tools/generate-fixtures.py ../bamboo-core
+clang-format -i bamboo/native/data.cpp
+```
+
+The fixture generator runs the original Go tests before exporting their behavior.
+Do not regenerate fixtures to conceal an unexplained native mismatch. Format C++
+changes with the repository's `.clang-format`.
+
+## Licensing
+
+The processing core and copied tables retain the upstream MIT license in
+`bamboo/native/LICENSE.core`. The adapter and Fcitx integration retain their
+LGPL-2.1-or-later notices; see `LICENSES/`.

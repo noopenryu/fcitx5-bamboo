@@ -1,6 +1,8 @@
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.16)
 
 project(fcitx5-bamboo VERSION 1.0.11)
+
+include(CTest)
 
 set(REQUIRED_FCITX_VERSION 5.1.13)
 find_package(ECM 1.0.0 REQUIRED)
@@ -10,9 +12,10 @@ include(GNUInstallDirs)
 include(ECMUninstallTarget)
 
 find_package(Fcitx5Core ${REQUIRED_FCITX_VERSION} REQUIRED)
-find_package(Fcitx5Module REQUIRED COMPONENTS TestFrontend)
+if(BUILD_TESTING)
+    find_package(Fcitx5Module REQUIRED COMPONENTS TestFrontend)
+endif()
 find_package(Gettext REQUIRED)
-find_package(Pthread REQUIRED)
 
 include("${FCITX_INSTALL_CMAKECONFIG_DIR}/Fcitx5Utils/Fcitx5CompilerSettings.cmake")
 add_definitions(-DFCITX_GETTEXT_DOMAIN=\"fcitx5-bamboo\")
@@ -30,3 +33,6 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/org.fcitx.Fcitx5.Addon.Bamboo.metainf
 
 feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)
 
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

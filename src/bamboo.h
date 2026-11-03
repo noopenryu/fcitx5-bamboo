@@ -7,7 +7,7 @@
 #ifndef _FCITX5_BAMBOO_BAMBOO_H_
 #define _FCITX5_BAMBOO_BAMBOO_H_
 
-#include "bamboo-core.h"
+#include "adapter.h"
 #include "bambooconfig.h"
 #include <cstdint>
 #include <fcitx-config/iniparser.h>
@@ -29,40 +29,6 @@
 #include <vector>
 
 namespace fcitx {
-
-class CGoObject {
-public:
-    CGoObject(std::optional<uintptr_t> handle = std::nullopt)
-        : handle_(handle) {}
-    ~CGoObject() {
-        if (handle_) {
-            DeleteObject(*handle_);
-        }
-    }
-    CGoObject(const CGoObject &other) = delete;
-    CGoObject(CGoObject &&other) = default;
-
-    CGoObject &operator=(CGoObject &&other) = default;
-    CGoObject &operator=(const CGoObject &other) = delete;
-
-    void reset(std::optional<uintptr_t> handle = std::nullopt) {
-        clear();
-        handle_ = handle;
-    }
-
-    uintptr_t handle() { return *handle_; }
-
-    operator bool() const { return handle_.has_value(); }
-
-private:
-    void clear() {
-        if (handle_) {
-            DeleteObject(*handle_);
-            handle_ = std::nullopt;
-        }
-    }
-    std::optional<uintptr_t> handle_;
-};
 
 class BambooState;
 
@@ -93,10 +59,8 @@ public:
     std::string subMode(const fcitx::InputMethodEntry &entry,
                         fcitx::InputContext &inputContext) override;
 
-    uintptr_t dictionary() { return dictionary_.handle(); }
-    uintptr_t macroTable() {
-        return macroTableObject_[*config_.inputMethod].handle();
-    }
+    auto dictionary() const { return dictionary_; }
+    auto macroTable() { return macroTableObject_.at(*config_.inputMethod); }
 
     void refreshEngine();
     void refreshOption();
@@ -113,7 +77,8 @@ private:
     BambooConfig config_;
     BambooCustomKeymap customKeymap_;
     std::unordered_map<std::string, BambooMacroTable> macroTables_;
-    std::unordered_map<std::string, CGoObject> macroTableObject_;
+    std::unordered_map<std::string, std::shared_ptr<const bamboo::MacroTable>>
+        macroTableObject_;
     FactoryFor<BambooState> factory_;
     std::vector<std::string> imNames_;
     std::unique_ptr<SimpleAction> inputMethodAction_;
@@ -125,7 +90,7 @@ private:
     std::unique_ptr<SimpleAction> spellCheckAction_;
     std::unique_ptr<SimpleAction> macroAction_;
     std::vector<ScopedConnection> connections_;
-    CGoObject dictionary_;
+    std::shared_ptr<const bamboo::Dictionary> dictionary_;
 };
 
 class BambooFactory : public AddonFactory {

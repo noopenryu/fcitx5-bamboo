@@ -59,25 +59,12 @@ std::string macroFile(std::string_view imName) {
     return stringutils::concat("conf/bamboo-macro-", imName, ".conf");
 }
 
-uintptr_t newMacroTable(const BambooMacroTable &macroTable) {
-    std::vector<char *> charArray;
-    RawConfig r;
-    macroTable.save(r);
+std::shared_ptr<const bamboo::MacroTable>
+newMacroTable(const BambooMacroTable &macroTable) {
+    auto result = std::make_shared<bamboo::MacroTable>();
     for (const auto &keymap : *macroTable.macros) {
-        charArray.push_back(const_cast<char *>(keymap.key->data()));
-        charArray.push_back(const_cast<char *>(keymap.value->data()));
+        (*result)[*keymap.key] = *keymap.value;
     }
-    charArray.push_back(nullptr);
-    return NewMacroTable(charArray.data());
-}
-
-std::vector<std::string> convertToStringList(char **array) {
-    std::vector<std::string> result;
-    for (int i = 0; array[i]; i++) {
-        result.push_back(array[i]);
-        free(array[i]);
-    }
-    free(array);
     return result;
 }
 
@@ -97,23 +84,20 @@ public:
     void setEngine() {
         bambooEngine_.reset();
 
+        bamboo::InputMethod method;
         if (*engine_->config().inputMethod == "Custom") {
-            std::vector<char *> charArray;
+            bamboo::Definition definition;
             for (const auto &keymap : *engine_->customKeymap().customKeymap) {
-                charArray.push_back(const_cast<char *>(keymap.key->data()));
-                FCITX_INFO() << charArray.back();
-                charArray.push_back(const_cast<char *>(keymap.value->data()));
-                FCITX_INFO() << charArray.back();
+                definition[*keymap.key] = *keymap.value;
             }
-            charArray.push_back(nullptr);
-            bambooEngine_.reset(NewCustomEngine(charArray.data(),
-                                                engine_->dictionary(),
-                                                engine_->macroTable()));
+            method =
+                bamboo::ParseInputMethod({{"Custom", definition}}, "Custom");
         } else {
-            bambooEngine_.reset(NewEngine(engine_->config().inputMethod->data(),
-                                          engine_->dictionary(),
-                                          engine_->macroTable()));
+            method = bamboo::ParseInputMethod(bamboo::inputMethodDefinitions(),
+                                              *engine_->config().inputMethod);
         }
+        bambooEngine_ = std::make_unique<bamboo::Adapter>(
+            std::move(method), engine_->dictionary(), engine_->macroTable());
         setOption();
     }
 
@@ -121,7 +105,7 @@ public:
         if (!bambooEngine_) {
             return;
         }
-        FcitxBambooEngineOption option = {
+        bamboo::Options option = {
             .autoNonVnRestore = *engine_->config().autoNonVnRestore,
             .ddFreeStyle = true,
             .macroEnabled = *engine_->config().macro,
@@ -131,7 +115,7 @@ public:
             .modernStyle = *engine_->config().modernStyle,
             .freeMarking = *engine_->config().freeMarking,
         };
-        EngineSetOption(bambooEngine_.handle(), &option);
+        bambooEngine_->setOptions(std::move(option));
     }
 
     void keyEvent(KeyEvent &keyEvent) {
@@ -148,28 +132,25 @@ public:
         }
 
         if (keyEvent.key().checkKeyList(*engine_->config().restoreKeyStroke)) {
-            EngineSetRestoreKeyStroke(bambooEngine_.handle());
+            bambooEngine_->requestRestore();
             keyEvent.filterAndAccept();
             return;
         }
 
-        if (EngineProcessKeyEvent(bambooEngine_.handle(),
-                                  keyEvent.rawKey().sym(),
-                                  keyEvent.rawKey().states())) {
+        if (bambooEngine_->processKey(keyEvent.rawKey().sym(),
+                                      keyEvent.rawKey().states())) {
             keyEvent.filterAndAccept();
         }
 
-        if (char *commit = EnginePullCommit(bambooEngine_.handle())) {
-            if (commit[0]) {
-                ic_->commitString(commit);
-            }
-            free(commit);
+        auto commit = bambooEngine_->pullCommit();
+        if (!commit.empty()) {
+            ic_->commitString(commit);
         }
 
         ic_->inputPanel().reset();
-        UniqueCPtr<char> preedit(EnginePullPreedit(bambooEngine_.handle()));
-        if (preedit && preedit.get()[0]) {
-            std::string_view preeditView = preedit.get();
+        const auto &preedit = bambooEngine_->preedit();
+        if (!preedit.empty()) {
+            std::string_view preeditView = preedit;
             Text text;
             TextFormatFlags format;
             if (ic_->capabilityFlags().test(CapabilityFlag::Preedit) &&
@@ -194,7 +175,7 @@ public:
     void reset() {
         ic_->inputPanel().reset();
         if (bambooEngine_) {
-            ResetEngine(bambooEngine_.handle());
+            bambooEngine_->reset();
         }
         ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         ic_->updatePreedit();
@@ -206,10 +187,10 @@ public:
             // The reason that we do not commit here is we want to force the
             // behavior. When client get unfocused, the framework will try to
             // commit the string.
-            EngineCommitPreedit(bambooEngine_.handle());
-            UniqueCPtr<char> commit(EnginePullCommit(bambooEngine_.handle()));
-            if (commit && commit.get()[0]) {
-                ic_->commitString(commit.get());
+            bambooEngine_->commitPreedit();
+            auto commit = bambooEngine_->pullCommit();
+            if (!commit.empty()) {
+                ic_->commitString(commit);
             }
         }
         ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
@@ -219,16 +200,15 @@ public:
 private:
     BambooEngine *engine_;
     InputContext *ic_;
-    CGoObject bambooEngine_;
+    std::unique_ptr<bamboo::Adapter> bambooEngine_;
 };
 
 BambooEngine::BambooEngine(Instance *instance)
     : instance_(instance), factory_([this](InputContext &ic) {
           return new BambooState(this, &ic);
       }) {
-    Init();
     {
-        auto imNames = convertToStringList(GetInputMethodNames());
+        auto imNames = bamboo::inputMethodNames();
         imNames.push_back("Custom");
         imNames_ = std::move(imNames);
     }
@@ -244,7 +224,7 @@ BambooEngine::BambooEngine(Instance *instance)
     if (!fd.isValid()) {
         throw std::runtime_error("Failed to load dictionary");
     }
-    dictionary_.reset(NewDictionary(fd.release()));
+    dictionary_ = bamboo::readDictionary(fd.fd());
 
     auto &uiManager = instance_->userInterfaceManager();
     inputMethodAction_ = std::make_unique<SimpleAction>();
@@ -282,7 +262,7 @@ BambooEngine::BambooEngine(Instance *instance)
     charsetMenu_ = std::make_unique<Menu>();
     charsetAction_->setMenu(charsetMenu_.get());
 
-    auto charsets = convertToStringList(GetCharsetNames());
+    auto charsets = bamboo::charsetNames();
     for (const auto &charset : charsets) {
         charsetSubAction_.emplace_back(std::make_unique<SimpleAction>());
         auto *action = charsetSubAction_.back().get();
@@ -338,7 +318,7 @@ void BambooEngine::reloadConfig() {
     for (const auto &imName : imNames_) {
         auto &table = macroTables_[imName];
         readAsIni(table, macroFile(imName));
-        macroTableObject_[imName].reset(newMacroTable(table));
+        macroTableObject_[imName] = newMacroTable(table);
     }
 
     populateConfig();
@@ -384,7 +364,7 @@ void BambooEngine::setSubConfig(const std::string &path,
         if (auto iter = macroTables_.find(imName); iter != macroTables_.end()) {
             iter->second.load(config, true);
             safeSaveAsIni(iter->second, macroFile(imName));
-            macroTableObject_[imName].reset(newMacroTable(iter->second));
+            macroTableObject_[imName] = newMacroTable(iter->second);
             refreshEngine();
         }
     }

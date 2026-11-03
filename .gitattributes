@@ -1,0 +1,2 @@
+# TSV parity fixtures use trailing tabs for empty final fields.
+bamboo/native/tests/*.tsv whitespace=-blank-at-eol linguist-generated=true
