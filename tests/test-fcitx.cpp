@@ -12,6 +12,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <testfrontend_public.h>
+#include <utility>
 
 namespace {
 void require(bool ok, const char *message) {
@@ -72,6 +73,33 @@ int main() {
                                                         false);
             require(ic->inputPanel().clientPreedit().empty(),
                     "Backspace did not clear composed character");
+            // A held key produces repeated presses (and, on some frontends,
+            // interleaved releases). Every press must reach the composition.
+            for (const auto &[key, expected] :
+                 {std::make_pair("k", std::string(256, 'k')),
+                  std::make_pair("a", std::string(255, 'a'))}) {
+                for (int i = 0; i < 256; ++i) {
+                    require(frontend->call<ITestFrontend::sendKeyEvent>(
+                                uuid, Key(key), false),
+                            "Repeated press was not accepted");
+                    const auto beforeRelease =
+                        ic->inputPanel().clientPreedit().toString();
+                    frontend->call<ITestFrontend::sendKeyEvent>(uuid, Key(key),
+                                                                true);
+                    require(ic->inputPanel().clientPreedit().toString() ==
+                                beforeRelease,
+                            "Release changed repeated composition");
+                }
+                require(ic->inputPanel().clientPreedit().toString() == expected,
+                        "Repeated preedit differs");
+                frontend->call<ITestFrontend::pushCommitExpectation>(expected +
+                                                                     " ");
+                require(frontend->call<ITestFrontend::sendKeyEvent>(
+                            uuid, Key("space"), false),
+                        "Repeated commit was not accepted");
+                require(ic->inputPanel().clientPreedit().empty(),
+                        "Repeated preedit not cleared on commit");
+            }
             instance.reloadAddonConfig("bamboo");
             frontend->call<ITestFrontend::destroyInputContext>(uuid);
             result = 0;
