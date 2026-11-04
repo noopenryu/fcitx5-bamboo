@@ -1,0 +1,9 @@
+{
+    "uuid": "bamboo-indicator@fcitx5-bamboo",
+    "name": "Bamboo Language Indicator",
+    "description": "EN/VI panel indicator and a centered language-change popup for Fcitx 5 Bamboo.",
+    "shell-version": ["50"],
+    "session-modes": ["user"],
+    "url": "https://github.com/noopenryu/fcitx5-bamboo",
+    "version": 1
+}

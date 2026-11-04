@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+.bamboo-panel-label {
+    width: 2.4em;
+    text-align: center;
+}
+
+.bamboo-language-popup {
+    margin: 0;
+    background-color: rgba(46, 46, 51, 0.96);
+    color: white;
+    min-width: 144px;
+    padding: 24px;
+    spacing: 8px;
+    border-radius: 16px;
+}
+
+.bamboo-popup-label {
+    font-size: 32px;
+    font-weight: bold;
+}
