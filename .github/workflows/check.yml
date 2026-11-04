@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm base-devel clang cmake ninja extra-cmake-modules fmt libuv boost git icu
+          pacman -Syu --noconfirm base-devel clang cmake ninja extra-cmake-modules fmt libuv boost git icu dbus libxkbcommon xkeyboard-config gjs
       - uses: actions/checkout@v4
         with:
           repository: fcitx/fcitx5
@@ -54,8 +54,8 @@ jobs:
         with:
           path: fcitx5
           cmake-option: >-
-            -DENABLE_KEYBOARD=Off -DENABLE_X11=Off -DENABLE_WAYLAND=Off -DENABLE_ENCHANT=Off
-            -DENABLE_DBUS=Off -DENABLE_SERVER=Off -DENABLE_EMOJI=Off -DUSE_SYSTEMD=Off
+            -DENABLE_KEYBOARD=On -DENABLE_X11=Off -DENABLE_WAYLAND=Off -DENABLE_ENCHANT=Off
+            -DENABLE_DBUS=On -DENABLE_SERVER=Off -DENABLE_EMOJI=Off -DUSE_SYSTEMD=Off
       - uses: actions/checkout@v4
         with:
           path: fcitx5-bamboo
@@ -68,11 +68,25 @@ jobs:
         uses: fcitx/github-actions@cmake
         with:
           path: fcitx5-bamboo
+          cmake-option: -DENABLE_GNOME_INTEGRATION=ON
       - name: Test
         run: |
           ctest --test-dir fcitx5-bamboo/build --output-on-failure
       - name: CodeQL Analysis
         uses: github/codeql-action/analyze@v3
+      - name: Sanitize addon and indicator lifecycle
+        if: matrix.compiler == 'gcc'
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          cmake -S fcitx5-bamboo -B fcitx5-bamboo/build-integration-sanitize -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_GNOME_INTEGRATION=ON \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build fcitx5-bamboo/build-integration-sanitize --parallel 2
+          ctest --test-dir fcitx5-bamboo/build-integration-sanitize --output-on-failure
 
   sanitize:
     name: Native core sanitizers

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(fcitx5-bamboo VERSION 1.0.11)
 
 include(CTest)
+option(ENABLE_GNOME_INTEGRATION "Build the optional GNOME indicator bridge" OFF)
 
 set(REQUIRED_FCITX_VERSION 5.1.13)
 find_package(ECM 1.0.0 REQUIRED)
@@ -25,6 +26,9 @@ add_subdirectory(po)
 add_subdirectory(bamboo)
 add_subdirectory(src)
 add_subdirectory(data)
+if(ENABLE_GNOME_INTEGRATION)
+    add_subdirectory(integrations/gnome)
+endif()
 
 fcitx5_translate_desktop_file(org.fcitx.Fcitx5.Addon.Bamboo.metainfo.xml.in
     org.fcitx.Fcitx5.Addon.Bamboo.metainfo.xml XML)
