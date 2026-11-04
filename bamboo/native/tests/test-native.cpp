@@ -314,6 +314,115 @@ void adapterTests() {
         temporary.reset();
     }
 }
+void repeatedKeyTests() {
+    constexpr size_t count = 256;
+    for (const std::string method : {"Telex", "Telex 2", "VNI"}) {
+        for (bool restore : {false, true}) {
+            const auto context = method + " restore=" + std::to_string(restore);
+            auto make = [&] {
+                Adapter engine(
+                    ParseInputMethod(inputMethodDefinitions(), method), {}, {});
+                Options options;
+                options.autoNonVnRestore = restore;
+                engine.setOptions(options);
+                return engine;
+            };
+            struct RepeatCase {
+                std::string prefix;
+                char key;
+                std::string expected;
+            };
+            const bool vni = method == "VNI";
+            std::vector<RepeatCase> cases = {
+                {"", 'k', std::string(count, 'k')},
+                {"", 'K', std::string(count, 'K')},
+                {"", 'a',
+                 vni       ? std::string(count, 'a')
+                 : restore ? std::string(count - 1, 'a')
+                           : std::string(count / 2 - 1, 'a') + "â"},
+                {"a", 's', "a" + std::string(vni ? count : count - 1, 's')},
+                {"a", 'w',
+                 "a" + std::string(vni ? count
+                                   : method == "Telex 2" && !restore
+                                       ? count / 2
+                                       : count - 1,
+                                   'w')}};
+            if (vni)
+                cases.push_back({"a", '1', "a" + std::string(count - 1, '1')});
+            for (const auto &test : cases) {
+                const auto context = method +
+                                     " restore=" + std::to_string(restore) +
+                                     " repeated " + test.key;
+                auto engine = make();
+                for (char key : test.prefix)
+                    engine.processKey(key, 0);
+                for (size_t i = 0; i < count; ++i) {
+                    require(engine.processKey(test.key, 0),
+                            context + " key not accepted");
+                    require(engine.pullCommit().empty(),
+                            context + " committed early");
+                }
+                require(engine.preedit() == test.expected,
+                        context + " preedit differs");
+                auto shortened = decode(test.expected);
+                shortened.pop_back();
+                require(engine.processKey(0xff08, 0) &&
+                            engine.preedit() == encode(shortened),
+                        context + " backspace differs");
+                require(engine.processKey(U' ', 0) &&
+                            engine.pullCommit() == encode(shortened) + " " &&
+                            engine.preedit().empty(),
+                        context + " commit differs");
+
+                const std::string keys = vni ? "chua63n" : "chuaarn";
+                for (char key : keys)
+                    engine.processKey(key, 0);
+                require(engine.preedit() == "chuẩn",
+                        context + " subsequent Vietnamese composition");
+                engine.requestRestore();
+                engine.processKey(U' ', 1);
+                require(engine.preedit() == keys,
+                        context + " restore raw strokes");
+                engine.reset();
+                require(engine.preedit().empty() && engine.pullCommit().empty(),
+                        context + " reset differs");
+            }
+            auto engine = make();
+            for (size_t i = 0; i < count; ++i)
+                engine.processKey(U'k', 0);
+            engine.requestRestore();
+            engine.processKey(U' ', 1);
+            require(engine.preedit() == std::string(count, 'k'),
+                    context + " long restore differs");
+            for (size_t i = count; i > 0; --i) {
+                require(engine.processKey(0xff08, 0) &&
+                            engine.preedit() == std::string(i - 1, 'k'),
+                        context + " delete to empty");
+            }
+            require(!engine.processKey(0xff08, 0),
+                    context + " empty backspace passed through");
+        }
+    }
+    Core core(ParseInputMethod(inputMethodDefinitions(), "Telex"));
+    const std::string prefix = std::string(count, 'k') + " ";
+    core.ProcessString(prefix, EnglishMode);
+    core.ProcessString("chuaarn", VietnameseMode);
+    require(core.GetProcessedString(VietnameseMode) == "chuẩn" &&
+                core.GetProcessedString(PunctuationMode) == "chuẩn" &&
+                core.GetProcessedString(VietnameseMode | FullText) ==
+                    prefix + "chuẩn" &&
+                core.GetProcessedString(EnglishMode | FullText) ==
+                    prefix + "chuaarn",
+            "Long composition word boundaries");
+    core.RestoreLastWord(false);
+    require(core.GetProcessedString(VietnameseMode | FullText) ==
+                prefix + "chuaarn",
+            "Long composition raw restore");
+    core.RestoreLastWord(true);
+    require(core.GetProcessedString(VietnameseMode | FullText) ==
+                prefix + "chuẩn",
+            "Long composition Vietnamese restore");
+}
 } // namespace
 int main() {
     try {
@@ -322,6 +431,7 @@ int main() {
         coreFixtures();
         adapterFixtures();
         adapterTests();
+        repeatedKeyTests();
         std::cout << "Native Bamboo tests passed\n";
         return 0;
     } catch (const std::exception &e) {

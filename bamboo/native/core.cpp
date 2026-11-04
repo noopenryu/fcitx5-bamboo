@@ -279,6 +279,36 @@ static Trans newAppending(Rune key, bool upperCase) {
     r.Key = r.EffectOn = r.Result = key;
     return makeTrans(r, {}, upperCase);
 }
+static Rune render(const Trans &t, Mode mode, const Composition *effects,
+                   bool reverseEffects = false) {
+    Rune c = (mode & EnglishMode) ? t->rule.Key : t->rule.EffectOn;
+    if (!(mode & EnglishMode) && effects) {
+        auto apply = [&](const Trans &effect) {
+            if (effect->rule.Type == MarkTransformation)
+                c = effect->rule.Effect == MarkRaw
+                        ? t->rule.Key
+                        : AddMarkToChar(c, effect->rule.Effect);
+            if (effect->rule.Type == ToneTransformation)
+                c = AddToneToChar(c, effect->rule.Effect);
+        };
+        if (reverseEffects) {
+            for (auto it = effects->rbegin(); it != effects->rend(); ++it)
+                apply(*it);
+        } else {
+            for (const auto &effect : *effects)
+                apply(effect);
+        }
+    }
+    if (mode & ToneLess)
+        c = AddToneToChar(c, 0);
+    if (mode & MarkLess)
+        c = AddMarkToChar(c, 0);
+    if (mode & LowerCase)
+        c = lower(c);
+    else if (t->IsUpperCase)
+        c = upper(c);
+    return c;
+}
 static Text canvas(const Composition &composition, Mode mode) {
     std::map<Trans, Composition> effects;
     Composition list;
@@ -290,27 +320,11 @@ static Text canvas(const Composition &composition, Mode mode) {
             effects[t->Target].push_back(t);
     }
     Text out;
+    out.reserve(list.size());
     for (const auto &t : list) {
-        Rune c = (mode & EnglishMode) ? t->rule.Key : t->rule.EffectOn;
-        if (!(mode & EnglishMode)) {
-            for (const auto &effect : effects[t]) {
-                if (effect->rule.Type == MarkTransformation)
-                    c = effect->rule.Effect == MarkRaw
-                            ? t->rule.Key
-                            : AddMarkToChar(c, effect->rule.Effect);
-                if (effect->rule.Type == ToneTransformation)
-                    c = AddToneToChar(c, effect->rule.Effect);
-            }
-        }
-        if (mode & ToneLess)
-            c = AddToneToChar(c, 0);
-        if (mode & MarkLess)
-            c = AddMarkToChar(c, 0);
-        if (mode & LowerCase)
-            c = lower(c);
-        else if (t->IsUpperCase)
-            c = upper(c);
-        out.push_back(c);
+        auto it = effects.find(t);
+        out.push_back(
+            render(t, mode, it == effects.end() ? nullptr : &it->second));
     }
     return out;
 }
@@ -335,20 +349,20 @@ static Trans rootTarget(Trans t) {
         t = t->Target;
     return t;
 }
-static std::pair<Composition, Composition>
-atomic(Composition c, Composition last, bool vowel) {
-    while (!c.empty()) {
-        auto t = c.back();
+static std::pair<Composition, Composition> atomic(const Composition &c,
+                                                  bool vowel) {
+    size_t start = c.size();
+    while (start) {
+        const auto &t = c[start - 1];
         if (t && !t->Target && vowel != IsVowel(t->rule.Result))
             break;
-        last.insert(last.begin(), t);
-        c.pop_back();
+        --start;
     }
-    return {c, last};
+    return {slice(c, 0, start), slice(c, start, c.size())};
 }
 static std::array<Composition, 3> cvcAppending(const Composition &c) {
-    auto [head, lc] = atomic(c, {}, false);
-    auto [fc, vo] = atomic(head, {}, true);
+    auto [head, lc] = atomic(c, false);
+    auto [fc, vo] = atomic(head, true);
     if (!lc.empty() && vo.empty() && fc.empty()) {
         fc = lc;
         lc.clear();
@@ -373,9 +387,12 @@ static std::array<Composition, 3> cvc(const Composition &c) {
     }
     auto parts = cvcAppending(list);
     for (auto &part : parts) {
-        auto original = part;
-        for (auto t : original)
-            part = join(part, effects[t]);
+        const auto count = part.size();
+        for (size_t i = 0; i < count; ++i) {
+            auto it = effects.find(part[i]);
+            if (it != effects.end())
+                part.insert(part.end(), it->second.begin(), it->second.end());
+        }
     }
     return parts;
 }
@@ -519,15 +536,34 @@ static Trans toneTarget(const Composition &c, bool standard) {
 }
 static std::pair<Composition, Composition>
 lastWord(const Composition &c, const Text &keys, bool punctuation = false) {
+    const Mode mode = punctuation
+                          ? EnglishMode
+                          : VietnameseMode | LowerCase | ToneLess | MarkLess;
+    std::map<Trans, Composition> effects;
+    Trans first;
+    Rune ch = 0;
+    // Track the first visible character of each suffix without rendering the
+    // whole suffix. Effects are collected backwards, then applied in order.
     for (size_t k = c.size(); k > 0; --k) {
         auto i = k - 1;
-        auto chars = canvas(slice(c, i, c.size()),
-                            punctuation ? EnglishMode
-                                        : VietnameseMode | LowerCase |
-                                              ToneLess | MarkLess);
-        if (chars.empty())
+        const auto &t = c[i];
+        bool changed = false;
+        if (punctuation || t->rule.Type == Appending) {
+            if (t->rule.Key) {
+                first = t;
+                changed = true;
+            }
+        } else if (t->Target) {
+            effects[t->Target].push_back(t);
+            changed = t->Target == first;
+        }
+        if (!first)
             continue;
-        auto ch = chars[0];
+        if (changed) {
+            auto it = effects.find(first);
+            ch = render(first, mode,
+                        it == effects.end() ? nullptr : &it->second, true);
+        }
         if (punctuation ? IsSpace(ch) : (!IsAlpha(ch) && !inKeyList(keys, ch)))
             return {slice(c, 0, i + 1), slice(c, i + 1, c.size())};
     }
